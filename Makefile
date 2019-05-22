@@ -23,7 +23,7 @@ $(ms):
 
 Sources += notes.md proposal/*.tex applyinfo proviewinfo
 
-Ignore += *.xlsx *.docx
+Ignore += applyinfo proviewinfo
 
 ######################################################################
 
