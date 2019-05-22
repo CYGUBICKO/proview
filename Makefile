@@ -21,7 +21,7 @@ $(ms):
 
 ######################################################################
 
-Sources += notes.md proposal applyinfo proviewinfo
+Sources += notes.md proposal/*.tex applyinfo proviewinfo
 
 Ignore += *.xlsx *.docx
 
