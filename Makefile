@@ -21,7 +21,7 @@ $(ms):
 
 ######################################################################
 
-Sources += notes.md
+Sources += notes.md proposal applyinfo proviewinfo
 Ignore += $(wildcard *.xlsx *.docx)
 
 ######################################################################
