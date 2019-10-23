@@ -2,6 +2,14 @@
 current: target
 -include target.mk
 
+######################################################################
+
+Sources += notes.md $(wildcard proposal/*.tex proposal/*.bib)
+
+Ignore += appdocs proviewinfo
+
+######################################################################
+
 ## Makestuff setup
 Sources += Makefile
 msrepo = https://github.com/dushoff
@@ -10,22 +18,12 @@ Ignore += local.mk
 -include local.mk
 -include $(ms)/os.mk
 
-# -include $(ms)/perl.def
-
 Ignore += $(ms)
 ## Sources += $(ms)
 Makefile: $(ms) $(ms)/Makefile
 $(ms):
 	git clone $(msrepo)/$(ms)
 
-
-######################################################################
-
-Sources += notes.md proposal/*.tex proposal/*.bib
-
-Ignore += appdocs proviewinfo
-
-######################################################################
 
 ### Makestuff rules
 
