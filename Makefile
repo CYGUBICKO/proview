@@ -10,6 +10,10 @@ Ignore += appdocs proviewinfo
 
 ######################################################################
 
+## Proview G-Drive linke: https://drive.google.com/drive/folders/1gNSb77TGL6n_iInUIxnH5YKimUAXB7kV?usp=sharing
+
+######################################################################
+
 ## Makestuff setup
 Sources += Makefile
 msrepo = https://github.com/dushoff
