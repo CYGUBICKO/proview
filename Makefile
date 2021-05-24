@@ -2,11 +2,16 @@
 current: target
 -include target.mk
 
+vim_session:
+	bash -cl "vmt"
+
 ######################################################################
 
 Sources += notes.md $(wildcard proposal/*.tex proposal/*.bib)
 
 Ignore += appdocs proviewinfo
+
+automatic_makeR = defined
 
 ######################################################################
 
@@ -14,23 +19,34 @@ Ignore += appdocs proviewinfo
 
 ######################################################################
 
-## Makestuff setup
+test.Rout: test.R
+
+## Write-up
+
+
+######################################################################
+
+### Makestuff
+
 Sources += Makefile
+
+## Sources += content.mk
+## include content.mk
+
+Ignore += makestuff
 msrepo = https://github.com/dushoff
-ms = makestuff
-Ignore += local.mk
--include local.mk
--include $(ms)/os.mk
+Makefile: makestuff/Makefile
+makestuff/Makefile:
+	git clone $(msrepo)/makestuff
+	ls $@
 
-Ignore += $(ms)
-## Sources += $(ms)
-Makefile: $(ms) $(ms)/Makefile
-$(ms):
-	git clone $(msrepo)/$(ms)
+-include makestuff/os.mk
+
+-include makestuff/pipeR.mk
+
+-include makestuff/git.mk
+-include makestuff/makeR.mk
+-include makestuff/visual.mk
 
 
-### Makestuff rules
-
--include $(ms)/git.mk
--include $(ms)/visual.mk
 
