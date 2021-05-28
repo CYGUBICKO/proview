@@ -20,6 +20,7 @@ automatic_makeR = defined
 ######################################################################
 
 test.Rout: test.R
+	$(wrapR)
 
 ## Write-up
 
