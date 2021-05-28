@@ -1,0 +1,626 @@
+\documentclass[12pt]{article}
+
+\usepackage{natbib}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{hyperref}
+
+\usepackage{caption}
+\usepackage{subcaption}
+
+\let\code=\texttt
+\let\alg=\textbf
+\let\proglang=\textsf
+\newcommand{\pkg}[1]{{\fontseries{m}\fontseries{b}\selectfont #1}}
+
+\setlength{\parindent}{0pt}
+
+\title{Yearly cohort analysis report}
+
+\begin{document}
+
+\maketitle
+\setkeys{Gin}{width=1\textwidth}
+
+\section*{Introduction}
+
+<<set_up, echo=FALSE>>=
+# source("setLibpath.R")
+source("coefplotFunctions.R")
+library("openxlsx")
+library(dplyr)
+library(ggplot2)
+library(satpred); satpredtheme()
+@
+
+This report presents the developed methodology in fitting both traditional and machine learning methods to survival data. The report starts with outlining some of the implemented algorithms, followed by fitting procedures and method-specific limitation, and then outlines some of the results.
+
+\section*{Implementation}
+
+\subsection*{Pipeline}
+
+There are many different modeling \proglang{R} software packages for survival analysis --- both machine leaning and traditional survival. Some have different syntax for model tuning, training and/or prediction. We started by providing a unified survival analysis interface for various \proglang{R} packages, as well as model calibration procedure for implemented algorithms. This attempts to streamline the process for creating predictive models in survival analysis context, and it's implemented in \pkg{satpred} (\textbf{S}urvival \textbf{A}nalysis \textbf{T}raining and \textbf{PRED}iction). The pipeline contains tools for:
+\begin{itemize}
+\item model tuning
+\item model training and fitting
+\item prediction accuracy measures
+\item variable importance 
+\item model validation and calibration
+\end{itemize}
+
+\subsection*{Overview of methods}\label{sec:methods_overview}
+
+Currently, we fit the following algorithms implemented in \pkg{satpred}:
+
+\subsubsection*{Cox proportional hazard model}
+
+Traditional hazard-based methods such as Cox proportional hazard (CPH) model \citep{cox1972regression} is commonly used in survival data. The CPH model defines the hazard function at time $t$ as
+%
+\begin{align*}
+h_i(t) = h_0(t)\exp(x_i^T\beta)
+\end{align*}
+%
+where $h_0(t)$ is the non-parametric baseline hazard function and $\exp(x_i^T\beta)$ is the relative hazard, which summarizes the effects of the covariates. Under proportional hazard assumption, the Cox model is fitted in two steps --- first, the parametric part is fitted by minimizing the partial log-likelihood and then estimating the non-parametric baseline hazard.
+
+Although CPH models are commonly used, especially when the main goal is to make inference on how the covariates impact on the survival probabilities, they are based on conditional probabilities and estimate the probabilities of survival by assuming a linear relation between the risk factors (covariates) and the event-time. This assumption may be too simplistic to accurately predict an event, for example, cancer patient outcomes which may have complex interaction between the covariates.
+
+\subsubsection*{Penalized cox proportional hazard models}
+
+Traditional CPH models may perform poorly in the case of high-dimensional data. As a way to overcome this, penalized models are often used. Penalized methods such as \emph{lasso}, \emph{ridge} and \emph{elastic net} offer a statistically convenient way handling high-dimensional data, especially where there a large number of (correlated) predictors and/or when building predictive models. Also, the subclass these methods that are sparsity-inducing (e.g., lasso and elastic net) can easily be used to select a subset of useful predictive feature while eliminating others.
+
+Penalized methods add a constraint to the log-likelihood function, which has the effect of shrinking the coefficient values towards zero, reducing variance and ensuring that less important features have less impact in the model. The $\ell_1$ (lasso) penalty is the absolute value of the magnitude of coefficients. It induces sparsity by selecting a subset of nonzero coefficients. In this way, lasso can be used to identify useful prognostic factors and usually works well in high dimensional applications, but will eliminate all but one of any set of strongly  multicollinear predictors. In addition, the number of features selected by lasso is bounded by number of observations. On the other hand, $\ell_2$ (ridge) penalty is the square of the magnitude of the coefficients. Ridge penalty shrinks the coefficients towards but never all the way to zero; hence it gives non-sparse estimates and can give correlated predictors approximately equal weights. The elastic net (a combination of $\ell_1$ and $\ell_2$) penalties combines the strength of lasso and ridge for improved predictive performance \citep{simon2011regularization}. 
+
+The tuning parameter, $\lambda$, plays an important role in training these class of models --- it controls the mechanism for \emph{variance-bias trade-off}. To find a suitable value for this parameter, we perform $10$-fold cross-validation over a range of $\lambda$s and pick the $\lambda$ that corresponds to the lowest cross-validated error (CVE). To be discussed in detail later.   
+
+\subsubsection*{Random survival forest}
+
+Random forests are ensemble of decision trees that are grown on bootstrapped training samples of the original data by choosing $m$ random samples of the original set of $p$ predictors at each split (node). Random survival forests (RSF) are random forests adapted for survival analysis of censored data. RSF are free of assumptions and due to the randomization during splitting, RSF directly lends itself to perform feature selection through a measure of variable importance.
+
+A detailed description of RSF algorithm is outlined in \citep{ishwaran2008random}:
+
+~
+
+\hrule
+
+~
+
+\alg{Algorithm 1}: Random survival forest algorithm
+
+~
+
+\hrule
+\begin{itemize}
+\item Draw \textbf{ntree} bootstrap samples from the original data.
+\item Grow a tree for each sample. At each node randomly select \textbf{mtry} predictors for splitting. The split is based on some survival splitting criterion (splitting rule).
+\item Grow the tree to a full size, constrained to \textbf{nodesize} unique deaths at the terminal nodes.
+\item Calculate an ensemble cumulative hazard estimate combining information from the \textbf{ntree} trees.
+\item Calculate an OOB error for the ensemble using B trees.
+\end{itemize}
+\hrule
+
+~
+
+A number of splitting rules have been proposed. However, we use the commonly used splitting criterion which is based on \emph{logrank} statistic. Cross-validation is used to determine \code{ntree}, \code{nodesize} and \code{ntree}.
+
+\subsubsection*{Generalized boosted regression models}
+
+Boosting is an iterative method which uses ensemble technique to train weak learners sequentially, where each new model that is added to the ensemble learns from the mistake of the previous models.
+
+There are two main approaches to boosting, including survival analysis --- likelihood-based and gradient boosting. Likelihood-based boosting uses base learners that maximize an overall likelihood in each boosting step, selecting only the base-learner which leads to largest increase in the likelihood. On the other hand, is equivalent to iteratively re-fitting the residuals of the ensemble model at each step.
+
+In this work, we fit gradient based boosting model for survival analysis from \proglang{R} package \pkg{gbm} with the following tuning parameters (choosen using cross-validation):
+\begin{itemize}
+\item The number of trees \textbf{n.trees}. Unlike RSF, boosting can overfit if \code{n.trees} is too large.
+\item The shrinkage parameter, \textbf{shrinkage}, which controls the rate at which boosting learns. Small value of \code{shrinkage} require using a very large value of \code{n.trees}.
+\item The interaction depth, \textbf{interaction.depth}, which controls the complexity of the boosted ensemble i.e., the highest level of variable level interaction. A value of $1$ implies an additive model, a value of $2$ implies a model with upto 2-way interactions, etc.
+\end{itemize}
+
+\subsubsection*{Neural networks}
+
+Here, we implement a multi-layer feed-forward neural network, \textbf{DeepSurv}, of which the output is the negative partial log-likelihood, parametrized by the weights of the networks:
+\begin{itemize}
+\item The hidden layers are fully-connected, with nonlinear activation functions, which necessarily do not have the same number of nodes in each of them.
+\item The output layer has a single node with a linear activation which gives the output $\hat{h}_{\theta}$ (log-risk hazard estimate).
+\item Some key tuning parameters considered:
+\begin{itemize}
+\item The number of hidden layers, \textbf{num\_nodes}, which defines the number of network weights and consequently the complexity.
+\item The dropout rate, \textbf{dropout}. Overfitting is a potential problem in neural networks. In particular, when there are multiple hidden layers, the problem is more often because of the large number of weights in comparison to the number of samples. Drop is a technique that can be used to deal with this \citep{srivastava2014dropout}.
+\item SGD learning rate, \textbf{learning\_rate}, which determines the step size of the weight iteration
+\end{itemize}
+\end{itemize}
+
+\section*{Model training and evaluations}
+
+\subsection*{Predictive performance measures}
+
+One of the key questions in building survival models is ''how well does the model predict the risk of future events?``. A common strategy to answer this question is to build and train several predictive models. In the previous section, we described a number of models that can be used in this case. All these models, have different strengths and limitations in terms of assumptions, interpretateability, computational efficiency, etc. In this work, 
+it is of interest to compare the predictive accuracies of these models in order to build a risk prediction model. Several measures can be used to assess the resulting probabilistic risk predictions:
+\begin{itemize}
+\item \textbf{Harrell's concordance index} which computes the probability that, for a random pair of individuals, the predicted survival times of the pair have the same ordering as their true survival times \citep{harrell1996multivariable}.
+\item \textbf{Brier score} which refers to the weighted average of the squared distances between the observed survival status and the predicted probabilities. The weights correspond to the probabilities of not being censored and might depend on the covariates \citep{mogensen2012evaluating}.
+\item \textbf{Prediction error curves} that are time dependent estimates of population averate Brier score.
+\end{itemize}
+
+\subsection*{Cross-validation}
+
+Validation set approach involves randomly splitting the data set into two parts, \emph{training} and \emph{validation} set. The algorithm is trained on the training set and used to predict the outcome in the validation set. The resulting error, \textbf{cross-validation error} (CVE), is the average error that results from using trained algorithm to predict the outcome in the validation set, and it provides an estimate of the \emph{test error}.
+
+Nested cross-validation can be performed by splitting the data set into \emph{training} and \emph{test} set. In the first part, cross-validation is performed using the training set and then (using tuned hyper-parameters where available) the final model is fitted to the entire training data. In the second part, the test data is to estimate the \emph{test} error. Test errors can be used to make generalization on how the model will perform in unseen data --- prediction accuracy. As a way to estimate prediction accuracy \emph{uncertainties}, testing data set can further be divided into different folds or bootstrapped samples (resamples) can be drawn from the test set and then prediction accuracy computed in each of the folds or resamples. In this task, we apply the latter. \autoref{fig:cross_validation_flowchart} summarizes the cross-validation and model validation procedure.
+
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.55\textwidth, height=0.45\textheight]{cross_validation_flowchart_png}
+\caption{Cross-validation and model validation.}
+\label{fig:cross_validation_flowchart}
+\end{figure}
+
+\subsection{Developing prediction model}
+Each of the methods discussed in \autoref{sec:methods_overview} has its own hyper-parameters and as result requires seperate strategy for parameter tuning. To build models, we split the training data into $10$-folds and perform cross-validation --- 9 folds are used to train the model and the left-out is used to validate its performance based on some model-specific performance measure. In particular, for penalized (lasso, ridge and elastic net), the hyper-parameters are tuned using cross-validated partial log-likelihood as described above; for random survival forest, neural networks and generalized boosted regression  models $E = (1 - C)$ is used, where $C$ is the Harrell's \emph{concordance} score.
+
+For coxph model, we apply backward stepwise variable elimination on the multivariate model which fits all the covariates. The final model is then re-trained using the selected variable from this step.
+
+\section*{Application}
+
+Here, we apply the models discussed in \autoref{sec:methods_overview} and present their results. We also compare our predictive accuracy scores to those of \cite{seow2020development}.
+
+\subsection*{Coxph}
+
+\autoref{fig:coefficient_plots_coxph} shows the coefficient estimates plots for multivariate Cox proportional hazard model fitted with covariates resulting from backward elimination.
+
+<<label=coefs_coxph, echo=FALSE>>=
+coef_df_coxph <- read.xlsx("outputs/coefficients_plots_coxph.xlsx")
+coef_plots_coxph <- coefplot(coef_df_coxph, per_category=TRUE)
+@
+
+
+\begin{figure}[H]
+\begin{subfigure}{0.3\textwidth}
+\centering
+<<label=coef_plots_coxph1, echo=FALSE, fig=TRUE, prefix=FALSE>>=
+coef_plots_coxph[[1]] + theme(legend.position="none")
+@
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+<<label=coef_plots_coxph2, echo=FALSE, fig=TRUE, prefix=FALSE>>=
+coef_plots_coxph[[2]] + theme(legend.position="none")
+@
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+<<label=coef_plots_coxph3, echo=FALSE, fig=TRUE, prefix=FALSE>>=
+coef_plots_coxph[[3]] + theme(legend.position="none")
+@
+\end{subfigure}
+
+~~
+
+\begin{subfigure}{0.3\textwidth}
+\centering
+<<label=coef_plots_coxph4, echo=FALSE, fig=TRUE, prefix=FALSE>>=
+coef_plots_coxph[[4]] + theme(legend.position="none")
+@
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+<<label=coef_plots_coxph5, echo=FALSE, fig=TRUE, prefix=FALSE>>=
+coef_plots_coxph[[5]] + theme(legend.position="none")
+@
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+<<label=coef_plots_coxph6, echo=FALSE, fig=TRUE, prefix=FALSE>>=
+coef_plots_coxph[[6]] + theme(legend.position="right")
+@
+\end{subfigure}
+
+~~
+
+\begin{subfigure}{0.3\textwidth}
+\centering
+<<label=coef_plots_coxph7, echo=FALSE, fig=TRUE, prefix=FALSE>>=
+coef_plots_coxph[[7]] + theme(legend.position="none")
+@
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+<<label=coef_plots_coxph8, echo=FALSE, fig=TRUE, prefix=FALSE>>=
+coef_plots_coxph[[8]] + theme(legend.position="none")
+@
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+<<label=coef_plots_coxph9, echo=FALSE, fig=TRUE, prefix=FALSE>>=
+coef_plots_coxph[[9]] + theme(legend.position="none")
+@
+\end{subfigure}
+\caption{Coefficient estimate plots for a Cox proportional hazard model showing the point estimate as well as the $95\%$ confidence interval.}
+\label{fig:coefficient_plots_coxph}
+\end{figure}
+
+
+
+\subsection*{Penalized methods}
+
+\subsubsection*{Lasso}
+
+\begin{figure}[H]
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr0_lasso_path_plot}
+\caption{\small{Year 0}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr1_lasso_path_plot}
+\caption{\small{Year 1}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr2_lasso_path_plot}
+\caption{\small{Year 2}}
+\end{subfigure}
+
+~~
+
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr3_lasso_path_plot}
+\caption{\small{Year 3}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr4_lasso_path_plot}
+\caption{\small{Year 4}}
+\end{subfigure}
+\caption{Plot of regularization path for the lasso ($\alpha = 1$) with the corresponding $\lambda$ values. The numbers at the top of the plot shows the number of nonzero coefficients (size of the model) at the corresponding value of $\lambda$.}
+\label{fig:lasso_path}
+\end{figure}
+
+
+
+\subsubsection*{Ridge}
+
+
+\begin{figure}[H]
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr0_ridge_path_plot}
+\caption{\small{Year 0}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr1_ridge_path_plot}
+\caption{\small{Year 1}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr2_ridge_path_plot}
+\caption{\small{Year 2}}
+\end{subfigure}
+
+~~
+
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr3_ridge_path_plot}
+\caption{\small{Year 3}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr4_ridge_path_plot}
+\caption{\small{Year 4}}
+\end{subfigure}
+\caption{Plot of regularization path for the ridge ($\alpha = 0$) with the corresponding $\lambda$ values. The numbers at the top of the plot shows the number of nonzero coefficients (size of the model) at the corresponding value of $\lambda$.}
+\label{fig:ridge_path}
+\end{figure}
+
+
+\subsubsection*{Elastic net}
+
+To implement elastic net, we first considered a range of $\alpha$s, i.e., $\alpha = \{0.2, 0.4, 0.6, 0.8\}$. For each $\alpha$, we analyze a solution path for $\lambda$ values and use $10$-fold cross validation to choose the optimal ($\alpha$-$\lambda$ pair that gives the minimum cross-validation error.)
+
+\begin{figure}[H]
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr0_glmnet_path_plot}
+\caption{\small{Year 0}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr1_glmnet_path_plot}
+\caption{\small{Year 1}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr2_glmnet_path_plot}
+\caption{\small{Year 2}}
+\end{subfigure}
+
+~~
+
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr3_glmnet_path_plot}
+\caption{\small{Year 3}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr4_glmnet_path_plot}
+\caption{\small{Year 4}}
+\end{subfigure}
+\caption{Plot of regularization path for the elastic net (at the optimal $\alpha$ equals to $0.4$, $0.8$, $0.6$, $0.8$, $0.2$ for year 0, 1, 2, 3 and 4 cohorts, respectively) with the corresponding $\lambda$ values. The numbers at the top of the plot shows the number of nonzero coefficients (size of the model) at the corresponding value of $\lambda$.}
+\label{fig:glmnet_path}
+\end{figure}
+
+
+\subsection*{GBM}
+
+The figures below show the tuning results for the gbm model.
+
+\begin{figure}[H]
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr0_gbm_cv_plot}
+\caption{\small{Year 0}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr1_gbm_cv_plot}
+\caption{\small{Year 1}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr2_gbm_cv_plot}
+\caption{\small{Year 2}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr3_gbm_cv_plot}
+\caption{\small{Year 3}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr4_gbm_cv_plot}
+\caption{\small{Year 4}}
+\end{subfigure}
+\caption{Training $10$-fold cross-validation plots. The right-side axis shows the shrinkage parameter applied to the trees. "Max. tree depth" refers to the highest level of variable interactions allowed.}
+\label{fig:gbm_cv}
+\end{figure}
+
+\subsubsection*{Random survival forest}
+
+Due to computational issues, random survival forest model was trained on only $2000$ cases.
+
+
+\begin{figure}[H]
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr0_rfsrc_cv_plot}
+\caption{\small{Year 0}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr1_rfsrc_cv_plot}
+\caption{\small{Year 1}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr2_rfsrc_cv_plot}
+\caption{\small{Year 2}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr3_rfsrc_cv_plot}
+\caption{\small{Year 3}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr4_rfsrc_cv_plot}
+\caption{\small{Year 4}}
+\end{subfigure}
+\caption{Cross-validation plots for random survival forest.}
+\label{fig:rfsrc_cv}
+\end{figure}
+
+
+\subsubsection*{Neural networks}
+
+Due to computational issues, neural networks model was trained on only $2000$ cases.
+
+\begin{figure}[H]
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr0_deepsurv_cv_plot}
+\caption{\small{Year 0}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr1_deepsurv_cv_plot}
+\caption{\small{Year 1}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr2_deepsurv_cv_plot}
+\caption{\small{Year 2}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr3_deepsurv_cv_plot}
+\caption{\small{Year 3}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/yr4_deepsurv_cv_plot}
+\caption{\small{Year 4}}
+\end{subfigure}
+\caption{Cross-validation plots for neural networks.}
+\label{fig:deepsurv_cv}
+\end{figure}
+
+
+\subsection*{Predictive performance}
+
+Here, we compare the performance of the algorithms on the test data using some of the measure highlighted above.
+
+\subsubsection*{Harrell's concordance score}
+
+<<label=concordance_all, echo=FALSE>>=
+concordance_stats_df <- read.xlsx("outputs/concordance_all.xlsx")
+## Concordance plot
+pos <- position_dodge(width = 0.5)
+concordance_plot <- (ggplot(concordance_stats_df, aes(x = factor(Type, levels=c("Train", "Test")), y = estimate, colour = model))
+	+ geom_pointrange(aes(ymin=lower, ymax=upper), position=pos, size=0.2)
+	+ scale_colour_brewer(palette = "Dark2") 
+	+ facet_wrap(~Cohort)
+	+ labs(x = "", y = "Score")
+	+ theme(legend.position="right")
+)
+@
+
+\begin{figure}[H]
+\centering
+<<label=concordance_plot, echo=FALSE, fig=TRUE, prefix=FALSE>>=
+print(concordance_plot)
+@
+\caption{\small{A comparison plot of concordance scores on training and test data. Also included score from the proview analysis.}}
+\end{figure}
+
+
+\subsubsection*{Time points C-index}
+
+<<label=cindex_all, echo=FALSE>>=
+cindex_stats_df <- read.xlsx("outputs/cindex_all.xlsx")
+## Cindex plot
+pos <- position_dodge(width=0.5)
+cindex_plot <- (ggplot(cindex_stats_df, aes(x = times, y = estimate, colour = model))
+	+ geom_pointrange(aes(ymin=lower, ymax=upper, colour=model), position=pos, size=0.2)
+	+ scale_colour_brewer(palette = "Dark2") 
+	+ facet_wrap(~Cohort, scales = "free_y")
+	+ labs(x = "Days", y = "Score")
+)
+@
+
+\begin{figure}[H]
+\centering
+<<label=cindex_plot, echo=FALSE, fig=TRUE, prefix=FALSE>>=
+print(cindex_plot)
+@
+\caption{\small{A comparison plot of C-index scores on training and test data. Also included score from the proview analysis.}}
+\end{figure}
+
+
+\subsubsection*{AUC}
+
+<<label=auc_all_plots, echo=FALSE>>=
+auc_all_temp <- read.xlsx("outputs/auc_all_plots.xlsx") 
+auc_all_df <- list()
+auc_all_df$AUC$score <- auc_all_temp
+class(auc_all_df) <- "Score"
+auc_all_plot <- (plot(auc_all_df, type="auc", pos = 0.5) 
+	+ scale_color_brewer(palette="Dark2")
+	+ facet_wrap(~cohorts, scales="free_y")
+	+ theme(legend.position="bottom")
+)
+@
+
+\begin{figure}[H]
+\centering
+<<label=auc_all_plot, echo=FALSE, fig=TRUE, prefix=FALSE>>=
+print(auc_all_plot)
+@
+\caption{\small{AUC plots}}
+\end{figure}
+
+
+\subsubsection*{Brier score}
+
+<<label=brier_all_plots, echo=FALSE>>=
+brier_all_temp <- read.xlsx("outputs/brier_all_plots.xlsx")
+brier_all_df <- list()
+brier_all_df$Brier$score <- brier_all_temp
+class(brier_all_df) <- "Score"
+brier_all_plot <- (plot(brier_all_df, type="brier", pos = 0.5) 
+	+ scale_color_brewer(palette="Dark2")
+	+ facet_wrap(~cohorts, scales="free_y")
+	+ theme(legend.position="bottom")
+)
+@
+
+\begin{figure}[H]
+\centering
+<<label=brier_all_plot, echo=FALSE, fig=TRUE, prefix=FALSE>>=
+print(brier_all_plot)
+@
+\caption{\small{Brier score plots}}
+\end{figure}
+
+
+\subsubsection*{ROC}
+
+%% <<label=roc_all_plots, echo=FALSE>>=
+%% roc_all_plot <- sapply(1:5, function(x){
+%% 	obj <- list()
+%% 	obj$ROC$plotframe <- read.xlsx("outputs/roc_all_plots.xlsx", sheet=x)
+%% 	class(obj) <- "Score"
+%% 	p1 <- plot(obj, type = "roc") + scale_color_brewer(palette="Dark2")
+%% 	return(p1)
+%% }, simplify=FALSE)
+%% @
+
+\begin{figure}[H]
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/roc_all_plots_year0}
+\caption{\small{Year 0}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/roc_all_plots_year1}
+\caption{\small{Year 1}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/roc_all_plots_year2}
+\caption{\small{Year 2}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/roc_all_plots_year3}
+\caption{\small{Year 3}}
+\end{subfigure}
+\begin{subfigure}{0.3\textwidth}
+\centering
+\includegraphics{outputs/roc_all_plots_year4}
+\caption{\small{Year 4}}
+\end{subfigure}
+\caption{ROC plots}
+\end{figure}
+
+
+\subsubsection{Variable importance}
+
+<<label=varimp_all_plots, echo=FALSE>>=
+varimp_all_abs_df <- read.xlsx("outputs/varimp_all_plots.xlsx")
+class(varimp_all_abs_df) <- c("varimp", "data.frame")
+varimp_all_plot <- (plot(varimp_all_abs_df) 
+	+ scale_color_brewer(palette="Dark2")
+	+ facet_wrap(~cohort)
+)
+@
+
+\begin{figure}[H]
+\centering
+<<label=varimp_all_plot, echo=FALSE, fig=TRUE, prefix=FALSE>>=
+print(varimp_all_plot)
+@
+\caption{\small{Variable importance plots}}
+\end{figure}
+
+
+\clearpage
+\bibliographystyle{plainnat}
+\bibliography{steve_single_models_writeup}
+\end{document}
